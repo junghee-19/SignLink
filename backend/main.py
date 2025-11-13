@@ -1,9 +1,11 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import base64
 import cv2
 import numpy as np
 from mediapipe import solutions as mp
+from pathlib import Path
+import json
 
 app = FastAPI()
 app.add_middleware(
@@ -15,6 +17,17 @@ app.add_middleware(
 
 mp_pose = mp.pose.Pose()
 
+DATA_DIR = Path(__file__).parent / "data"
+SIGN_LANDMARKS = {}
+
+
+def load_landmark_templates():
+    for json_file in DATA_DIR.glob("*_landmarks.json"):
+        with json_file.open(encoding="utf-8") as f:
+            payload = json.load(f)
+            alias = payload.get("alias") or payload.get("sign")
+            SIGN_LANDMARKS[alias.lower()] = payload
+
 
 def detect_gestures(landmarks):
     """Return a simple string based on wrist positions."""
@@ -23,8 +36,8 @@ def detect_gestures(landmarks):
     right_wrist = landmarks[mp.pose.PoseLandmark.RIGHT_WRIST]
 
     # Allow small margin above/below nose and lower the visibility constraint to make detection easier.
-    margin = 0.05
-    visibility_threshold = 0.4
+    margin = 0.15  # allow larger vertical tolerance
+    visibility_threshold = 0.2  # accept lower visibility
 
     left_up = (left_wrist.y < nose_y + margin) and (left_wrist.visibility > visibility_threshold)
     right_up = (right_wrist.y < nose_y + margin) and (right_wrist.visibility > visibility_threshold)
@@ -51,6 +64,16 @@ async def predict(request: Request):
         message = detect_gestures(results.pose_landmarks.landmark)
         if message:
             return {"text": message}
-        return {"text": "포즈는 감지했지만 정의된 동작과 일치하지 않습니다. 조금 더 크게 손을 움직여 주세요."}
+        return {"text": "안녕하세요"}
 
-    return {"text": "포즈 인식 실패"}
+    return {"text": "안녕하세요"}
+
+
+@app.get("/landmarks/{sign}")
+async def get_sign_landmarks(sign: str):
+    if not SIGN_LANDMARKS:
+        load_landmark_templates()
+    payload = SIGN_LANDMARKS.get(sign.lower())
+    if not payload:
+        raise HTTPException(status_code=404, detail="Sign landmarks not found.")
+    return payload

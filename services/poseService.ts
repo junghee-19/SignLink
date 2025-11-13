@@ -1,4 +1,5 @@
-const DEFAULT_API_URL = import.meta.env.VITE_POSE_API_URL || 'http://localhost:8000/predict';
+const API_BASE = import.meta.env.VITE_BACKEND_BASE_URL || 'http://localhost:8000';
+const DEFAULT_API_URL = import.meta.env.VITE_POSE_API_URL || `${API_BASE}/predict`;
 
 export interface PosePredictionResponse {
   text: string;
@@ -19,4 +20,3 @@ export async function analyzePose(imageBase64: string): Promise<PosePredictionRe
 
   return response.json();
 }
-

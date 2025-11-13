@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import type { Message } from '../types';
 import { translateSignToText, translateTextToSign } from '../services/geminiService';
 import { analyzePose } from '../services/poseService';
+import { fetchLandmarks, type LandmarkPoint } from '../services/landmarkService';
 import { CameraIcon, HomeIcon, RefreshIcon } from '../constants';
 import { IoHandLeftOutline } from 'react-icons/io5';
 
@@ -13,6 +14,9 @@ const ChatInterface = () => {
   const [isWebcamOn, setIsWebcamOn] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [signDescription, setSignDescription] = useState('사승소닌! 무엇을 도와드릴까요?');
+  const [activeVideo, setActiveVideo] = useState<'hello' | null>(null);
+  const [landmarkOverlay, setLandmarkOverlay] = useState<LandmarkPoint[]>([]);
+  const landmarkCache = useRef<Record<string, LandmarkPoint[]>>({});
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -32,6 +36,7 @@ const ChatInterface = () => {
       stream?.getTracks().forEach(track => track.stop());
       if(videoRef.current) videoRef.current.srcObject = null;
       setIsWebcamOn(false);
+      setActiveVideo(null);
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -39,6 +44,7 @@ const ChatInterface = () => {
           videoRef.current.srcObject = stream;
         }
         setIsWebcamOn(true);
+        setActiveVideo(null);
       } catch (err) {
         console.error("Error accessing webcam:", err);
         setSignDescription("Error: Could not access webcam. Please check permissions.");
@@ -50,6 +56,9 @@ const ChatInterface = () => {
     if (!videoRef.current || !canvasRef.current || isProcessing) return;
     
     setIsProcessing(true);
+    setSignDescription("잠시만요, 제스처를 준비해주세요...");
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
     setSignDescription("Analyzing gesture...");
 
     const video = videoRef.current;
@@ -65,8 +74,14 @@ const ChatInterface = () => {
     try {
       const poseResult = await analyzePose(base64Data);
       if (poseResult?.text) {
-        setMessages(prev => [...prev, { id: Date.now(), text: poseResult.text, sender: 'user' }]);
-        setSignDescription(poseResult.text);
+        const message = poseResult.text.trim();
+        setMessages(prev => [...prev, { id: Date.now(), text: message, sender: 'user' }]);
+        setSignDescription(message);
+        if (message === '안녕하세요') {
+          setActiveVideo('hello');
+        } else {
+          setActiveVideo(null);
+        }
       } else {
         setSignDescription('포즈 인식 결과가 없습니다.');
       }
@@ -80,8 +95,14 @@ const ChatInterface = () => {
       const hasMeaningfulText = translatedText && !translatedText.toLowerCase().startsWith('error');
 
       if (hasMeaningfulText) {
-        setMessages(prev => [...prev, { id: Date.now(), text: translatedText, sender: 'user' }]);
+        const message = translatedText.trim();
+        setMessages(prev => [...prev, { id: Date.now(), text: message, sender: 'user' }]);
         setSignDescription('추가 설명이 생성되었습니다.');
+        if (message === '안녕하세요') {
+          setActiveVideo('hello');
+        } else {
+          setActiveVideo(null);
+        }
       }
     } catch (err) {
       console.error('Gemini translation error:', err);
@@ -94,18 +115,55 @@ const ChatInterface = () => {
     e.preventDefault();
     if (!inputValue.trim() || isProcessing) return;
 
-    const textToTranslate = inputValue;
+    const textToTranslate = inputValue.trim();
     setInputValue('');
     setIsProcessing(true);
+    setMessages(prev => [...prev, { id: Date.now(), text: textToTranslate, sender: 'user' }]);
+    if (textToTranslate === '안녕하세요') {
+      setActiveVideo('hello');
+    } else {
+      setActiveVideo(null);
+    }
 
     if (isWebcamOn) {
       await handleToggleWebcam();
     }
 
     const description = await translateTextToSign(textToTranslate);
-    setSignDescription(description);
+    if (description && !description.toLowerCase().startsWith('error')) {
+      setSignDescription(description);
+    } else {
+      setSignDescription('AI가 잠시 응답하지 않아요. 다시 시도해 주세요.');
+    }
     setIsProcessing(false);
   };
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadLandmarks = async () => {
+      if (!activeVideo) {
+        if (isMounted) setLandmarkOverlay([]);
+        return;
+      }
+      if (landmarkCache.current[activeVideo]) {
+        if (isMounted) setLandmarkOverlay(landmarkCache.current[activeVideo]);
+        return;
+      }
+      try {
+        const data = await fetchLandmarks(activeVideo);
+        const points = data.average || [];
+        landmarkCache.current[activeVideo] = points;
+        if (isMounted) setLandmarkOverlay(points);
+      } catch (err) {
+        console.error('Failed to load landmark overlay:', err);
+        if (isMounted) setLandmarkOverlay([]);
+      }
+    };
+    loadLandmarks();
+    return () => {
+      isMounted = false;
+    };
+  }, [activeVideo]);
 
   return (
     <div className="flex-1 flex flex-col bg-[#e5e7eb] overflow-hidden">
@@ -134,9 +192,40 @@ const ChatInterface = () => {
                     <video ref={videoRef} autoPlay playsInline className={`w-full h-full object-cover ${isWebcamOn ? 'block' : 'hidden'}`}></video>
                     <canvas ref={canvasRef} className="hidden"></canvas>
                     {!isWebcamOn && (
-                      <div className="flex flex-col items-center justify-center text-blue-600 space-y-2">
-                        <IoHandLeftOutline className="w-20 h-20" />
-                        <p className="text-base font-semibold text-gray-700">카메라를 켜고 제스처를 보여주세요</p>
+                      activeVideo === 'hello' ? (
+                        <video
+                          id="html5VideoPreview"
+                          controls
+                          preload="auto"
+                          autoPlay
+                          playsInline
+                          className="w-full h-full object-cover"
+                          controlsList="nodownload"
+                        >
+                          <source src="http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191021/629456/MOV000257117_700X466.webm" type="video/webm" />
+                          <source src="http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191021/629456/MOV000257117_700X466.mp4" type="video/mp4" />
+                          <source src="http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191021/629456/MOV000257117_700X466.ogv" type="video/ogv" />
+                        </video>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-blue-600 space-y-2">
+                          <IoHandLeftOutline className="w-20 h-20" />
+                          <p className="text-base font-semibold text-gray-700">카메라를 켜고 제스처를 보여주세요</p>
+                        </div>
+                      )
+                    )}
+                    {!isWebcamOn && landmarkOverlay.length > 0 && (
+                      <div className="absolute inset-0 pointer-events-none">
+                        {landmarkOverlay.map(point => (
+                          <span
+                            key={point.id}
+                            className="absolute w-2 h-2 rounded-full bg-blue-500 opacity-80"
+                            style={{
+                              left: `${point.x * 100}%`,
+                              top: `${point.y * 100}%`,
+                              transform: 'translate(-50%, -50%)',
+                            }}
+                          />
+                        ))}
                       </div>
                     )}
                      <div className="absolute top-2 right-2 flex items-center gap-2">
