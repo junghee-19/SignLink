@@ -13,10 +13,11 @@ const ChatInterface = () => {
   const [inputValue, setInputValue] = useState('');
   const [isWebcamOn, setIsWebcamOn] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [signDescription, setSignDescription] = useState('사승소닌! 무엇을 도와드릴까요?');
-  const [activeVideo, setActiveVideo] = useState<'hello' | null>(null);
+  const [signDescription, setSignDescription] = useState('김수화님! 무엇을 도와드릴까요?');
+  const [videoQueue, setVideoQueue] = useState<string[]>([]);
   const [landmarkOverlay, setLandmarkOverlay] = useState<LandmarkPoint[]>([]);
   const landmarkCache = useRef<Record<string, LandmarkPoint[]>>({});
+  const activeVideo = videoQueue[0] ?? null;
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -30,13 +31,30 @@ const ChatInterface = () => {
     scrollToBottom();
   }, [messages]);
 
+  const enqueueVideosFromText = useCallback((text: string) => {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    const additions: string[] = [];
+    if (normalized.includes('안녕하세요')) {
+      additions.push('hello');
+    }
+    if (normalized.includes('배부르네요')) {
+      additions.push('full');
+    }
+    if (!additions.length) return;
+    setVideoQueue(prev => [...prev, ...additions]);
+  }, []);
+
+  const handleVideoEnded = useCallback(() => {
+    setVideoQueue(prev => prev.slice(1));
+  }, []);
+
   const handleToggleWebcam = useCallback(async () => {
     if (isWebcamOn) {
       const stream = videoRef.current?.srcObject as MediaStream;
       stream?.getTracks().forEach(track => track.stop());
       if(videoRef.current) videoRef.current.srcObject = null;
       setIsWebcamOn(false);
-      setActiveVideo(null);
+      setVideoQueue([]);
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -44,7 +62,7 @@ const ChatInterface = () => {
           videoRef.current.srcObject = stream;
         }
         setIsWebcamOn(true);
-        setActiveVideo(null);
+        setVideoQueue([]);
       } catch (err) {
         console.error("Error accessing webcam:", err);
         setSignDescription("Error: Could not access webcam. Please check permissions.");
@@ -77,11 +95,7 @@ const ChatInterface = () => {
         const message = poseResult.text.trim();
         setMessages(prev => [...prev, { id: Date.now(), text: message, sender: 'user' }]);
         setSignDescription(message);
-        if (message === '안녕하세요') {
-          setActiveVideo('hello');
-        } else {
-          setActiveVideo(null);
-        }
+        enqueueVideosFromText(message);
       } else {
         setSignDescription('포즈 인식 결과가 없습니다.');
       }
@@ -98,11 +112,7 @@ const ChatInterface = () => {
         const message = translatedText.trim();
         setMessages(prev => [...prev, { id: Date.now(), text: message, sender: 'user' }]);
         setSignDescription('추가 설명이 생성되었습니다.');
-        if (message === '안녕하세요') {
-          setActiveVideo('hello');
-        } else {
-          setActiveVideo(null);
-        }
+        enqueueVideosFromText(message);
       }
     } catch (err) {
       console.error('Gemini translation error:', err);
@@ -119,11 +129,7 @@ const ChatInterface = () => {
     setInputValue('');
     setIsProcessing(true);
     setMessages(prev => [...prev, { id: Date.now(), text: textToTranslate, sender: 'user' }]);
-    if (textToTranslate === '안녕하세요') {
-      setActiveVideo('hello');
-    } else {
-      setActiveVideo(null);
-    }
+    enqueueVideosFromText(textToTranslate);
 
     if (isWebcamOn) {
       await handleToggleWebcam();
@@ -131,7 +137,9 @@ const ChatInterface = () => {
 
     const description = await translateTextToSign(textToTranslate);
     if (description && !description.toLowerCase().startsWith('error')) {
-      setSignDescription(description);
+      if (!description.toLowerCase().startsWith('to sign')) {
+        setSignDescription(description);
+      }
     } else {
       setSignDescription('AI가 잠시 응답하지 않아요. 다시 시도해 주세요.');
     }
@@ -165,6 +173,19 @@ const ChatInterface = () => {
     };
   }, [activeVideo]);
 
+  const videoSources: Record<string, { webm: string; mp4: string; ogv: string }> = {
+    hello: {
+      webm: "http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191021/629456/MOV000257117_700X466.webm",
+      mp4: "http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191021/629456/MOV000257117_700X466.mp4",
+      ogv: "http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191021/629456/MOV000257117_700X466.ogv",
+    },
+    full: {
+      webm: "http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191028/631916/MOV000244936_700X466.webm",
+      mp4: "http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191028/631916/MOV000244936_700X466.mp4",
+      ogv: "http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191028/631916/MOV000244936_700X466.ogv",
+    },
+  };
+
   return (
     <div className="flex-1 flex flex-col bg-[#e5e7eb] overflow-hidden">
         {/* Top Bar */}
@@ -192,8 +213,9 @@ const ChatInterface = () => {
                     <video ref={videoRef} autoPlay playsInline className={`w-full h-full object-cover ${isWebcamOn ? 'block' : 'hidden'}`}></video>
                     <canvas ref={canvasRef} className="hidden"></canvas>
                     {!isWebcamOn && (
-                      activeVideo === 'hello' ? (
+                      activeVideo && videoSources[activeVideo] ? (
                         <video
+                          key={activeVideo}
                           id="html5VideoPreview"
                           controls
                           preload="auto"
@@ -201,10 +223,11 @@ const ChatInterface = () => {
                           playsInline
                           className="w-full h-full object-cover"
                           controlsList="nodownload"
+                          onEnded={handleVideoEnded}
                         >
-                          <source src="http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191021/629456/MOV000257117_700X466.webm" type="video/webm" />
-                          <source src="http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191021/629456/MOV000257117_700X466.mp4" type="video/mp4" />
-                          <source src="http://sldict.korean.go.kr/multimedia/multimedia_files/convert/20191021/629456/MOV000257117_700X466.ogv" type="video/ogv" />
+                          <source src={videoSources[activeVideo].webm} type="video/webm" />
+                          <source src={videoSources[activeVideo].mp4} type="video/mp4" />
+                          <source src={videoSources[activeVideo].ogv} type="video/ogv" />
                         </video>
                       ) : (
                         <div className="flex flex-col items-center justify-center text-blue-600 space-y-2">

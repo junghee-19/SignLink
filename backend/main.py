@@ -64,9 +64,9 @@ async def predict(request: Request):
         message = detect_gestures(results.pose_landmarks.landmark)
         if message:
             return {"text": message}
-        return {"text": "안녕하세요"}
+        return {"text": "안녕하세요 배부르네요"}
 
-    return {"text": "안녕하세요"}
+    return {"text": "안녕하세요 배부르네요"}
 
 
 @app.get("/landmarks/{sign}")
